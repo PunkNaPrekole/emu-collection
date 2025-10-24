@@ -23,6 +23,7 @@ pub struct CPU {
     pub display: Display,
     pub keyboard: Keyboard,
     pub waiting_for_key: Option<usize>,
+    pub running: bool,
 }
 
 impl CPU {
@@ -39,6 +40,7 @@ impl CPU {
             display: Display::new(),
             keyboard: Keyboard::new(),
             waiting_for_key: None,
+            running: true,
         };
         
         // Загружаем шрифты в память
@@ -77,7 +79,7 @@ impl CPU {
         // Объединяем в одну 16-битную инструкцию
         let opcode = (higher_byte << 8) | lower_byte;
         
-        println!("🔍 FETCH: PC={:04X}, Opcode={:04X}", self.program_counter, opcode);
+        println!("FETCH: PC={:04X}, Opcode={:04X}", self.program_counter, opcode);
         
         // Переходим к следующей инструкции
         self.program_counter += 2;
@@ -100,6 +102,9 @@ impl CPU {
     }
     
     pub fn cycle(&mut self) {
+        if !self.running {
+            return;
+        }
         //
         if self.waiting_for_key.is_some() {
             return;
@@ -156,6 +161,7 @@ impl CPU {
             (0xF, _, 0x5, 0x5) => self.op_fx55(x),   // Сохранить регистры V0-VX в память начиная с I
             (0xF, _, 0x6, 0x5) => self.op_fx65(x),   // Загрузить регистры V0-VX из памяти начиная с I
             (0xF, _, 0x0, 0xA) => self.op_fx0a(x),   // Ожидание нажатия клавиши
+            (0x0, 0x0, 0xF, 0xD) => self.op_00fd(),  // EXIT - остановка программы (кастом)
             _ => println!("Unknown opcode: {:04X}", opcode),
         }
     }
@@ -360,5 +366,10 @@ impl CPU {
     fn op_fx0a(&mut self, x: usize) {
         println!("Waiting for key press -> V[{}]", x);
         self.waiting_for_key = Some(x);
+    }
+
+    fn op_00fd(&mut self) {
+        println!("Program exited via EXIT instruction");
+        self.running = false;    
     }
 }
