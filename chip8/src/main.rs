@@ -1,5 +1,3 @@
-// chip8/src/main.rs
-
 mod cpu;
 mod constants;
 mod display;
@@ -14,8 +12,7 @@ use std::time::{Duration, Instant};
 const WINDOW_SCALE: usize = 10; // Увеличиваем окно в 10 раз
 
 fn main() {
-    println!("🚀 CHIP-8 Emulator Starting...");
-    
+  
     // Получаем аргументы командной строки
     let args: Vec<String> = env::args().collect();
     
@@ -44,20 +41,12 @@ fn main() {
     
     // Загружаем ROM
     match cpu.load_rom(rom_path) {
-        Ok(_) => println!("✅ ROM '{}' loaded successfully", rom_path),
+        Ok(_) => println!("ROM '{}' loaded successfully", rom_path),
         Err(e) => {
-            println!("❌ Failed to load ROM '{}': {}", rom_path, e);
+            println!("Failed to load ROM '{}': {}", rom_path, e);
             process::exit(1);
         }
     }
-    
-    println!("🎮 Starting emulation...");
-    println!("🎯 Controls:");
-    println!("   CHIP-8:  1 2 3 C    →    Keyboard: 1 2 3 4");
-    println!("            4 5 6 D                   Q W E R");
-    println!("            7 8 9 E                   A S D F"); 
-    println!("            A 0 B F                   Z X C V");
-    println!("Press ESC to exit\n");
     
     run_emulation(&mut cpu, &mut window);
 }
@@ -66,7 +55,7 @@ fn print_usage(program_name: &str) {
     println!("Usage: {} <rom_file>", program_name);
     println!("\nAvailable ROMs:");
     
-    let roms_dir = "roms/games";
+    let roms_dir = "roms";
     if let Ok(entries) = std::fs::read_dir(roms_dir) {
         for entry in entries {
             if let Ok(entry) = entry {
@@ -88,7 +77,7 @@ fn run_emulation(cpu: &mut CPU, window: &mut Window) {
     let mut last_timer_update = Instant::now();
     let mut cycle_count = 0;
     
-    // Главный игровой цикл
+    // Главный цикл
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // Обрабатываем ввод с клавиатуры
         handle_keyboard_input(cpu, window);
@@ -108,7 +97,7 @@ fn run_emulation(cpu: &mut CPU, window: &mut Window) {
             if let Some(key) = cpu.keyboard.get_pressed_key() {
                 cpu.registers[reg] = key;
                 cpu.waiting_for_key = None;
-                println!("✅ Key pressed: {} -> V[{}]", key, reg);
+                println!("Key pressed: {} -> V[{}]", key, reg);
             }
         }
         
@@ -122,8 +111,8 @@ fn run_emulation(cpu: &mut CPU, window: &mut Window) {
         
     }
     
-    println!("\n✅ Emulation finished!");
-    println!("📈 Total cycles: {}", cycle_count);
+    println!("\nEmulation finished!");
+    println!("Total cycles: {}", cycle_count);
 }
 
 /// Обработка ввода с клавиатуры

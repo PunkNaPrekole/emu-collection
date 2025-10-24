@@ -23,7 +23,7 @@ impl Display {
             }
         }
         self.needs_redraw = true;
-        println!("🖥️  Display cleared");
+        println!("Display cleared");
     }
 
     /// Отрисовка спрайта
