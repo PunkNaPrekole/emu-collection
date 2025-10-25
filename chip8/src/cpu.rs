@@ -252,7 +252,7 @@ impl CPU {
         self.registers[0xF] = if collision { 1 } else { 0 };
         
         // Показываем экран в консоли для отладки
-        self.display.debug_print();
+        //self.display.debug_print();
     }
 
     /// 3XKK - Пропустить следующую инструкцию если VX == KK
