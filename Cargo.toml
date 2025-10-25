@@ -1,3 +1,6 @@
 [workspace]
-members = ["chip8"]
+members = [
+    "chip8", 
+    "micro-py"
+]
 resolver = "2"

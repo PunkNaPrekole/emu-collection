@@ -5,6 +5,7 @@ mod error;
 mod ir;
 mod parser;
 mod backends;
+pub mod span;
 
 use backends::BackendType;
 
@@ -50,19 +51,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     
     match cli.command {
-        Commands::Compile { input, target, output: _, show_ast: _ } => {
+        Commands::Compile { input, target, output, show_ast } => {
             println!("Compiling {} for {}...", input, target);
             
             let source = fs::read_to_string(&input)?;
             let program = parser::parse(&source)?;
+
+            if show_ast {
+                println!("=== AST ===");
+                println!("{:#?}", program);
+            }
             
             match BackendType::all().iter().find(|b| b.name() == target) {
                 Some(backend_type) => {
                     let mut backend = backend_type.create();
                     let machine_code = backend.compile(&program)?;
+
+                    let output_path = match output {
+                        Some(path) => path,
+                        None => {
+                            // Автоматическое имя: input.ch8 или input.bin
+                            let base_name = input.trim_end_matches(".py");
+                            match target.as_str() {
+                                "chip8" => format!("{}.ch8", base_name),
+                                _ => format!("{}.bin", base_name),
+                            }
+                            
+                        }
+                    };
                     
                     // Сохраняем в файл
-                    let output_path = format!("{}.ch8", input.trim_end_matches(".py"));
                     fs::write(&output_path, &machine_code)?;
                     println!("Compiled to: {}", output_path);
                     println!("Code size: {} bytes", machine_code.len());

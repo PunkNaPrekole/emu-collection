@@ -21,7 +21,7 @@ impl Chip8Backend {
         Self {
             code: Vec::new(),
             labels: std::collections::HashMap::new(),
-            current_address: 0x200, // CHIP-8 программы начинаются с 0x200
+            current_address: 0x200,
             patches: Vec::new(),
         }
     }
@@ -31,6 +31,8 @@ impl Chip8Backend {
         for statement in &program.statements {
             self.compile_statement(statement)?;
         }
+
+        self.emit_instruction(0x00FD); // остановка программы
 
         for i in 0..self.patches.len() {
             let (placeholder_addr, _) = self.patches[i];
@@ -43,10 +45,10 @@ impl Chip8Backend {
 
     fn compile_statement(&mut self, statement: &ast::Statement) -> Result<(), CompileError> {
         match statement {
-            ast::Statement::Assign { target, value } => {
+            ast::Statement::Assign { target, value, .. } => {
                 self.compile_assign(target, value)?;
             }
-            ast::Statement::Print { x, y, character } => {
+            ast::Statement::Print { x, y, character, .. } => {
                 self.compile_draw_char(x, y, *character)?;
             }
             ast::Statement::ClearScreen => {
@@ -55,12 +57,14 @@ impl Chip8Backend {
             ast::Statement::Label { name } => {
                 self.labels.insert(name.clone(), self.current_address);
             }
-            ast::Statement::While { condition, body } => {
+            ast::Statement::While { condition, body, .. } => {
                 self.compile_while(condition, body)?;
+            }
+            ast::Statement::For { variable, start, end, body, .. } => {
+                self.compile_for(variable, start, end, body)?;
             }
             ast::Statement::Pass => {
                 // pass не генерирует никакого кода - это пустая операция
-                ()
             }
             _ => {
                 return Err(CompileError::SyntaxError {
@@ -74,18 +78,18 @@ impl Chip8Backend {
 
     fn compile_assign(&mut self, target: &str, value: &ast::Expression) -> Result<(), CompileError> {
         match value {
-            ast::Expression::Number(n) => {
-                // v0 = 10 → 0x600A (LD V0, 10)
+            ast::Expression::Number(n, _) => {
+                // v0 = 10 -> 0x600A (LD V0, 10)
                 let reg = self.parse_register(target)?;
                 self.emit_instruction(0x6000 | ((reg as u16) << 8) | (*n as u16));
             }
-            ast::Expression::Variable(var) => {
-                // v0 = v1 → 0x8010 (LD V0, V1)
+            ast::Expression::Variable(var, _) => {
+                // v0 = v1 -> 0x8010 (LD V0, V1)
                 let reg_dest = self.parse_register(target)?;
                 let reg_src = self.parse_register(var)?;
                 self.emit_instruction(0x8000 | ((reg_dest as u16) << 8) | ((reg_src as u16) << 4));
             }
-            ast::Expression::BinaryOp { left, op, right } => {
+            ast::Expression::BinaryOp { left, op, right, .. } => {
                 self.compile_binary_op(target, left, op, right)?;
             }
         }
@@ -106,11 +110,11 @@ impl Chip8Backend {
             _ => {
                 let condition_check_addr = self.current_address;
             
-                // Компилируем условие, которое должно пропустить прыжок ВНЕ цикла если условие истинно
+                // Компилируем условие, которое должно пропустить прыжок вне цикла если условие истинно
                 // То есть: если условие ложно - прыгаем за цикл
                 self.compile_condition(condition, true)?; // true = прыгать если ложно
                 
-                // Запоминаем адрес прыжка ВНЕ цикла (пока заглушка)
+                // Запоминаем адрес прыжка вне цикла (пока заглушка)
                 let exit_jump_placeholder = self.emit_jump_placeholder();
                 
                 // Компилируем тело цикла
@@ -129,6 +133,67 @@ impl Chip8Backend {
         Ok(())
     }
 
+    fn compile_for(
+        &mut self, 
+        variable: &str, 
+        start: &ast::Expression, 
+        end: &ast::Expression, 
+        body: &[ast::Statement]
+    ) -> Result<(), CompileError> {
+        let reg_counter = self.parse_register(variable)?;
+        
+        // 1. Инициализация счетчика: variable = start
+        self.compile_assign(variable, start)?;
+        
+        // 2. Метка начала цикла
+        let loop_start = self.current_address;
+        
+        // 3. Проверка условия: if variable >= end: break
+        // Загружаем end во временный регистр
+        let temp_reg = 0xE; // Используем VE как временный регистр
+        
+        match end {
+            ast::Expression::Number(n, _) => {
+                // VE = end
+                self.emit_instruction(0x6000 | ((temp_reg as u16) << 8) | (*n as u16));
+            }
+            ast::Expression::Variable(var, _) => {
+                let reg_end = self.parse_register(var)?;
+                // VE = reg_end
+                self.emit_instruction(0x8000 | ((temp_reg as u16) << 8) | ((reg_end as u16) << 4));
+            }
+            _ => {
+                return Err(CompileError::BackendError {
+                    message: "Complex end expressions in for loops not supported yet".to_string(),
+                });
+            }
+        }
+        
+        // Сравниваем: if reg_counter >= VE → выходим из цикла
+        // Vx - VE, устанавливает VF=1 если НЕ было заёма (Vx >= VE)
+        self.emit_instruction(0x8005 | ((reg_counter as u16) << 8) | ((temp_reg as u16) << 4));
+        
+        // Если VF == 1 (reg_counter >= end), прыгаем за цикл
+        self.emit_instruction(0x3000 | ((0xF as u16) << 8) | 0x01); // SE VF, 1
+        let exit_jump_placeholder = self.emit_jump_placeholder();
+        
+        // 4. Тело цикла
+        for stmt in body {
+            self.compile_statement(stmt)?;
+        }
+        
+        // 5. Инкремент счетчика: variable = variable + 1
+        self.emit_instruction(0x7001 | ((reg_counter as u16) << 8)); // ADD Vx, 1
+        
+        // 6. Прыжок обратно к проверке условия
+        self.emit_instruction(0x1000 | loop_start); // JP loop_start
+        
+        // 7. Исправляем прыжок выхода
+        let exit_addr = self.current_address;
+        self.patch_jump(exit_jump_placeholder, exit_addr);
+        
+        Ok(())
+    }
     fn compile_condition(&mut self, condition: &ast::Condition, jump_on_false: bool) -> Result<(), CompileError> {
         match condition {
             ast::Condition::True => {
@@ -142,6 +207,9 @@ impl Chip8Backend {
             }
             ast::Condition::Greater(left, right) => {
                 self.compile_greater_check(left, right, jump_on_false)?;
+            }
+            ast::Condition::Less(_left, _right) => {
+                ()
             }
             ast::Condition::KeyPressed(_key_expr) => {
                 ()
@@ -158,7 +226,7 @@ impl Chip8Backend {
     ) -> Result<(), CompileError> {
         match (left, right) {
             // v0 == 5 или v0 != 5
-            (ast::Expression::Variable(left_var), ast::Expression::Number(n)) => {
+            (ast::Expression::Variable(left_var, _), ast::Expression::Number(n, _)) => {
                 let reg = self.parse_register(left_var)?;
                 
                 if jump_when_equal {
@@ -175,7 +243,7 @@ impl Chip8Backend {
             }
             
             // v0 == v1 или v0 != v1
-            (ast::Expression::Variable(left_var), ast::Expression::Variable(right_var)) => {
+            (ast::Expression::Variable(left_var, _), ast::Expression::Variable(right_var, _)) => {
                 let reg_left = self.parse_register(left_var)?;
                 let reg_right = self.parse_register(right_var)?;
                 
@@ -208,7 +276,7 @@ impl Chip8Backend {
         // VF = 1 если НЕ было заёма (v0 >= 5), VF = 0 если был заём (v0 < 5)
         
         match (left, right) {
-            (ast::Expression::Variable(left_var), ast::Expression::Number(n)) => {
+            (ast::Expression::Variable(left_var, _), ast::Expression::Number(n, _)) => {
                 let reg_left = self.parse_register(left_var)?;
                 let temp_reg = 0xE; // Используем VE как временный регистр
                 
@@ -250,7 +318,7 @@ impl Chip8Backend {
             ast::BinaryOperator::Add => {
                 match (left, right) {
                     // Случай: v0 = v1 + 5
-                    (ast::Expression::Variable(left_var), ast::Expression::Number(n)) => {
+                    (ast::Expression::Variable(left_var, _), ast::Expression::Number(n, _)) => {
                         let reg_left = self.parse_register(left_var)?;
                         // Загружаем левую переменную в целевой регистр
                         self.emit_instruction(0x8000 | ((reg_target as u16) << 8) | ((reg_left as u16) << 4));
@@ -258,7 +326,7 @@ impl Chip8Backend {
                         self.emit_instruction(0x7000 | ((reg_target as u16) << 8) | (*n as u16));
                     }
                     // Случай: v0 = 5 + v1  
-                    (ast::Expression::Number(n), ast::Expression::Variable(right_var)) => {
+                    (ast::Expression::Number(n, _), ast::Expression::Variable(right_var, _)) => {
                         // Загружаем число в целевой регистр
                         self.emit_instruction(0x6000 | ((reg_target as u16) << 8) | (*n as u16));
                         // Добавляем переменную
@@ -266,7 +334,7 @@ impl Chip8Backend {
                         self.emit_instruction(0x8004 | ((reg_target as u16) << 8) | ((reg_right as u16) << 4));
                     }
                     // Случай: v0 = v1 + v2
-                    (ast::Expression::Variable(left_var), ast::Expression::Variable(right_var)) => {
+                    (ast::Expression::Variable(left_var, _), ast::Expression::Variable(right_var, _)) => {
                         let reg_left = self.parse_register(left_var)?;
                         let reg_right = self.parse_register(right_var)?;
                         // Загружаем левую переменную
@@ -290,10 +358,10 @@ impl Chip8Backend {
 
     fn _compile_to_register(&mut self, reg: u8, expr: &ast::Expression) -> Result<(), CompileError> {
         match expr {
-            ast::Expression::Number(n) => {
+            ast::Expression::Number(n, _) => {
                 self.emit_instruction(0x6000 | ((reg as u16) << 8) | (*n as u16));
             }
-            ast::Expression::Variable(var) => {
+            ast::Expression::Variable(var, _) => {
                 let reg_src = self.parse_register(var)?;
                 self.emit_instruction(0x8000 | ((reg as u16) << 8) | ((reg_src as u16) << 4));
             }
@@ -302,38 +370,6 @@ impl Chip8Backend {
                 message: "Complex expressions not supported yet".to_string(),
             }),
         }
-        Ok(())
-    }
-
-    fn compile_draw(&mut self, x: &ast::Expression, y: &ast::Expression, height: &ast::Expression) -> Result<(), CompileError> {
-        // DRW Vx, Vy, nibble → 0xDxyn
-        self.emit_instruction(0xA050);
-        
-        let reg_x = match x {
-            ast::Expression::Variable(var) => self.parse_register(var)?,
-            _ => return Err(CompileError::SyntaxError {
-                line: 1,
-                message: "Draw x must be a register".to_string(),
-            }),
-        };
-        
-        let reg_y = match y {
-            ast::Expression::Variable(var) => self.parse_register(var)?,
-            _ => return Err(CompileError::SyntaxError {
-                line: 1,
-                message: "Draw y must be a register".to_string(),
-            }),
-        };
-        
-        let height_val = match height {
-            ast::Expression::Number(n) => *n as u8,
-            _ => return Err(CompileError::SyntaxError {
-                line: 1,
-                message: "Draw height must be a number".to_string(),
-            }),
-        };
-        
-        self.emit_instruction(0xD000 | ((reg_x as u16) << 8) | ((reg_y as u16) << 4) | (height_val as u16));
         Ok(())
     }
 
@@ -367,7 +403,7 @@ impl Chip8Backend {
         
         // Компилируем координаты
         let reg_x = match x {
-            ast::Expression::Variable(var) => self.parse_register(var)?,
+            ast::Expression::Variable(var, _) => self.parse_register(var)?,
             _ => return Err(CompileError::SyntaxError {
                 line: 1,
                 message: "Draw x must be a register".to_string(),
@@ -375,20 +411,20 @@ impl Chip8Backend {
         };
         
         let reg_y = match y {
-            ast::Expression::Variable(var) => self.parse_register(var)?,
+            ast::Expression::Variable(var, _) => self.parse_register(var)?,
             _ => return Err(CompileError::SyntaxError {
                 line: 1,
                 message: "Draw y must be a register".to_string(),
             }),
         };
         
-        // Рисуем спрайт высотой 5 (все шрифты CHIP-8 высотой 5 пикселей)
+        // Рисуем спрайт
         self.emit_instruction(0xD000 | ((reg_x as u16) << 8) | ((reg_y as u16) << 4) | 5);
         Ok(())
     }
 
     fn compile_clear_screen(&mut self) {
-        // CLS → 0x00E0
+        // CLS -> 0x00E0
         self.emit_instruction(0x00E0);
     }
 
@@ -416,9 +452,17 @@ impl Chip8Backend {
     }
 
     fn patch_jump(&mut self, placeholder_address: u16, target_address: u16) {
+        // Преобразуем абсолютный адрес в индекс в массиве code
+        let code_index = (placeholder_address - 0x200) as usize;
+        
+        // Проверяем границы
+        if code_index >= self.code.len() {
+            eprintln!("Warning: Attempted to patch out-of-bounds address: 0x{:04X}", placeholder_address);
+            return;
+        }
+        
         let instruction = 0x1000 | target_address;
-        let addr_usize = placeholder_address as usize;
-        self.code[addr_usize] = (instruction >> 8) as u8;
-        self.code[addr_usize + 1] = instruction as u8;
+        self.code[code_index] = (instruction >> 8) as u8;
+        self.code[code_index + 1] = instruction as u8;
     }
 }

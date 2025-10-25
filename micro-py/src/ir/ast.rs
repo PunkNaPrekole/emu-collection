@@ -1,3 +1,5 @@
+use crate::span::Span;
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub statements: Vec<Statement>,
@@ -10,12 +12,14 @@ pub enum Statement {
     Assign {
         target: String,
         value: Expression,
+        span: Span,
     },
     /// Рисовать символ, пример: print(x, y, "A")
     Print {
         x: Expression,
         y: Expression,
         character: char,
+        span: Span,
     },
     /// if условие: ... 
     If {
@@ -27,6 +31,14 @@ pub enum Statement {
     While {
         condition: Condition,
         body: Vec<Statement>,
+        span: Span,
+    },
+    For {
+        variable: String,
+        start: Expression,
+        end: Expression,
+        body: Vec<Statement>,
+        span: Span,
     },
     /// jump("label")
     Jump {
@@ -47,14 +59,15 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub enum Expression {
     /// 10, 0xFF, 0b1010 (decimal, hex, binary)
-    Number(u16),
+    Number(u16, Span),
     /// v0, x, y
-    Variable(String),
+    Variable(String, Span),
     /// v0 + 5
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOperator,
         right: Box<Expression>,
+        span: Span,
     },
 }
 
@@ -67,6 +80,7 @@ pub enum Condition {
     NotEqual(Expression, Expression),
     /// v0 > 5
     Greater(Expression, Expression),
+    Less(Expression, Expression),
     /// key_pressed(1)
     KeyPressed(Expression),
 }
